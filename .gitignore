@@ -56,3 +56,11 @@ htmlcov/
 # ngrok
 ngrok.exe
 ngrok
+
+# Database
+*.db
+*.sqlite
+*.sqlite3
+
+# OAuth state files
+oauth_states/
