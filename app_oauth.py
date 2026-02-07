@@ -40,9 +40,9 @@ class Config:
     malicious_keywords: List[str] = field(default_factory=lambda: [
         "phish", "malware", "badsite", "danger", "hack", "virus"
     ])
-    vt_timeout: int = 10
-    vt_max_retries: int = 3
-    vt_retry_delay: float = 2.0
+    vt_timeout: int = 15
+    vt_max_retries: int = 5
+    vt_retry_delay: float = 3.0
     cache_maxsize: int = 1000
 
 
@@ -309,6 +309,22 @@ def handle_message(event, say, client):
             # VirusTotal unavailable, use keyword check
             is_malicious = check_with_fallback(url)
             check_method = "keyword analysis"
+            
+            # Warn user that we couldn't verify with VirusTotal
+            if not is_malicious:
+                logger.warning(f"Could not verify URL with VirusTotal: {url}")
+                say(
+                    text=(
+                        f"⚠️ *URL Verification Incomplete*\n"
+                        f"<@{user}> shared a link that could not be fully verified:\n"
+                        f"`{url}`\n\n"
+                        f"⚠️ VirusTotal analysis timed out\n"
+                        f"✓ No suspicious keywords detected\n\n"
+                        f"🔍 Please verify this link manually before clicking."
+                    ),
+                    channel=channel
+                )
+                continue  # Skip to next URL
         else:
             is_malicious = vt_result
             check_method = "VirusTotal"
@@ -326,7 +342,7 @@ def handle_message(event, say, client):
                 channel=channel
             )
         else:
-            logger.info(f"URL appears safe: {url}")
+            logger.info(f"URL verified safe by {check_method}: {url}")
 
 
 # Flask app to handle Slack events and OAuth
