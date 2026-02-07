@@ -1,9 +1,9 @@
 """
 Database layer for Slack LinkGuard multi-workspace support.
-Stores OAuth tokens and workspace information using SQLite.
+Supports both SQLite (local dev) and PostgreSQL (production).
 """
 
-import sqlite3
+import os
 import logging
 from datetime import datetime
 from typing import Optional, Dict, List
@@ -11,41 +11,90 @@ from contextlib import contextmanager
 
 logger = logging.getLogger(__name__)
 
-DATABASE_PATH = "workspaces.db"
+# Detect database type from environment
+DATABASE_URL = os.environ.get("DATABASE_URL")
+USE_POSTGRES = DATABASE_URL is not None
+
+if USE_POSTGRES:
+    import psycopg2
+    from psycopg2.extras import RealDictCursor
+    logger.info("Using PostgreSQL database")
+else:
+    import sqlite3
+    DATABASE_PATH = "workspaces.db"
+    logger.info("Using SQLite database")
 
 
 @contextmanager
 def get_db_connection():
-    """Context manager for database connections."""
-    conn = sqlite3.connect(DATABASE_PATH)
-    conn.row_factory = sqlite3.Row
-    try:
-        yield conn
-        conn.commit()
-    except Exception as e:
-        conn.rollback()
-        logger.error(f"Database error: {e}")
-        raise
-    finally:
-        conn.close()
+    """Context manager for database connections (SQLite or PostgreSQL)."""
+    if USE_POSTGRES:
+        conn = psycopg2.connect(DATABASE_URL)
+        try:
+            yield conn
+            conn.commit()
+        except Exception as e:
+            conn.rollback()
+            logger.error(f"Database error: {e}")
+            raise
+        finally:
+            conn.close()
+    else:
+        conn = sqlite3.connect(DATABASE_PATH)
+        conn.row_factory = sqlite3.Row
+        try:
+            yield conn
+            conn.commit()
+        except Exception as e:
+            conn.rollback()
+            logger.error(f"Database error: {e}")
+            raise
+        finally:
+            conn.close()
+
+
+def get_cursor(conn):
+    """Get a cursor with appropriate configuration for the database type."""
+    if USE_POSTGRES:
+        return conn.cursor(cursor_factory=RealDictCursor)
+    else:
+        return conn.cursor()
 
 
 def init_database():
     """Initialize the database schema."""
     with get_db_connection() as conn:
-        cursor = conn.cursor()
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS workspaces (
-                team_id TEXT PRIMARY KEY,
-                team_name TEXT NOT NULL,
-                bot_token TEXT NOT NULL,
-                bot_user_id TEXT,
-                bot_id TEXT,
-                app_id TEXT,
-                installed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                last_active TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            )
-        """)
+        cursor = get_cursor(conn)
+        
+        if USE_POSTGRES:
+            # PostgreSQL syntax
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS workspaces (
+                    team_id TEXT PRIMARY KEY,
+                    team_name TEXT NOT NULL,
+                    bot_token TEXT NOT NULL,
+                    bot_user_id TEXT,
+                    bot_id TEXT,
+                    app_id TEXT,
+                    installed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    last_active TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+        else:
+            # SQLite syntax
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS workspaces (
+                    team_id TEXT PRIMARY KEY,
+                    team_name TEXT NOT NULL,
+                    bot_token TEXT NOT NULL,
+                    bot_user_id TEXT,
+                    bot_id TEXT,
+                    app_id TEXT,
+                    installed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    last_active TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+        
         logger.info("Database initialized successfully")
 
 
@@ -62,18 +111,35 @@ def save_workspace(team_id: str, team_name: str, bot_token: str, bot_user_id: st
         app_id: App ID (optional)
     """
     with get_db_connection() as conn:
-        cursor = conn.cursor()
-        cursor.execute("""
-            INSERT INTO workspaces (team_id, team_name, bot_token, bot_user_id, bot_id, app_id, installed_at, last_active)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-            ON CONFLICT(team_id) DO UPDATE SET
-                team_name = excluded.team_name,
-                bot_token = excluded.bot_token,
-                bot_user_id = excluded.bot_user_id,
-                bot_id = excluded.bot_id,
-                app_id = excluded.app_id,
-                last_active = excluded.last_active
-        """, (team_id, team_name, bot_token, bot_user_id, bot_id, app_id, datetime.utcnow(), datetime.utcnow()))
+        cursor = get_cursor(conn)
+        
+        if USE_POSTGRES:
+            # PostgreSQL syntax with ON CONFLICT
+            cursor.execute("""
+                INSERT INTO workspaces (team_id, team_name, bot_token, bot_user_id, bot_id, app_id, installed_at, last_active)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                ON CONFLICT(team_id) DO UPDATE SET
+                    team_name = EXCLUDED.team_name,
+                    bot_token = EXCLUDED.bot_token,
+                    bot_user_id = EXCLUDED.bot_user_id,
+                    bot_id = EXCLUDED.bot_id,
+                    app_id = EXCLUDED.app_id,
+                    last_active = EXCLUDED.last_active
+            """, (team_id, team_name, bot_token, bot_user_id, bot_id, app_id, datetime.utcnow(), datetime.utcnow()))
+        else:
+            # SQLite syntax
+            cursor.execute("""
+                INSERT INTO workspaces (team_id, team_name, bot_token, bot_user_id, bot_id, app_id, installed_at, last_active)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(team_id) DO UPDATE SET
+                    team_name = excluded.team_name,
+                    bot_token = excluded.bot_token,
+                    bot_user_id = excluded.bot_user_id,
+                    bot_id = excluded.bot_id,
+                    app_id = excluded.app_id,
+                    last_active = excluded.last_active
+            """, (team_id, team_name, bot_token, bot_user_id, bot_id, app_id, datetime.utcnow(), datetime.utcnow()))
+        
         logger.info(f"Saved workspace: {team_name} ({team_id})")
 
 
@@ -88,16 +154,27 @@ def get_workspace_token(team_id: str) -> Optional[str]:
         Bot token if found, None otherwise
     """
     with get_db_connection() as conn:
-        cursor = conn.cursor()
-        cursor.execute("SELECT bot_token FROM workspaces WHERE team_id = ?", (team_id,))
+        cursor = get_cursor(conn)
+        
+        if USE_POSTGRES:
+            cursor.execute("SELECT bot_token FROM workspaces WHERE team_id = %s", (team_id,))
+        else:
+            cursor.execute("SELECT bot_token FROM workspaces WHERE team_id = ?", (team_id,))
+        
         row = cursor.fetchone()
         if row:
             # Update last_active timestamp
-            cursor.execute(
-                "UPDATE workspaces SET last_active = ? WHERE team_id = ?",
-                (datetime.utcnow(), team_id)
-            )
-            return row["bot_token"]
+            if USE_POSTGRES:
+                cursor.execute(
+                    "UPDATE workspaces SET last_active = %s WHERE team_id = %s",
+                    (datetime.utcnow(), team_id)
+                )
+            else:
+                cursor.execute(
+                    "UPDATE workspaces SET last_active = ? WHERE team_id = ?",
+                    (datetime.utcnow(), team_id)
+                )
+            return row["bot_token"] if USE_POSTGRES else row["bot_token"]
         return None
 
 
@@ -112,18 +189,32 @@ def get_workspace(team_id: str) -> Optional[Dict]:
         Workspace dictionary if found, None otherwise
     """
     with get_db_connection() as conn:
-        cursor = conn.cursor()
-        cursor.execute("""
-            SELECT team_id, team_name, bot_token, bot_user_id, bot_id, app_id, installed_at, last_active
-            FROM workspaces WHERE team_id = ?
-        """, (team_id,))
+        cursor = get_cursor(conn)
+        
+        if USE_POSTGRES:
+            cursor.execute("""
+                SELECT team_id, team_name, bot_token, bot_user_id, bot_id, app_id, installed_at, last_active
+                FROM workspaces WHERE team_id = %s
+            """, (team_id,))
+        else:
+            cursor.execute("""
+                SELECT team_id, team_name, bot_token, bot_user_id, bot_id, app_id, installed_at, last_active
+                FROM workspaces WHERE team_id = ?
+            """, (team_id,))
+        
         row = cursor.fetchone()
         if row:
             # Update last_active timestamp
-            cursor.execute(
-                "UPDATE workspaces SET last_active = ? WHERE team_id = ?",
-                (datetime.utcnow(), team_id)
-            )
+            if USE_POSTGRES:
+                cursor.execute(
+                    "UPDATE workspaces SET last_active = %s WHERE team_id = %s",
+                    (datetime.utcnow(), team_id)
+                )
+            else:
+                cursor.execute(
+                    "UPDATE workspaces SET last_active = ? WHERE team_id = ?",
+                    (datetime.utcnow(), team_id)
+                )
             return dict(row)
         return None
 
@@ -136,7 +227,7 @@ def get_all_workspaces() -> List[Dict]:
         List of workspace dictionaries
     """
     with get_db_connection() as conn:
-        cursor = conn.cursor()
+        cursor = get_cursor(conn)
         cursor.execute("""
             SELECT team_id, team_name, bot_user_id, installed_at, last_active
             FROM workspaces
@@ -154,15 +245,20 @@ def delete_workspace(team_id: str):
         team_id: Slack team/workspace ID
     """
     with get_db_connection() as conn:
-        cursor = conn.cursor()
-        cursor.execute("DELETE FROM workspaces WHERE team_id = ?", (team_id,))
+        cursor = get_cursor(conn)
+        
+        if USE_POSTGRES:
+            cursor.execute("DELETE FROM workspaces WHERE team_id = %s", (team_id,))
+        else:
+            cursor.execute("DELETE FROM workspaces WHERE team_id = ?", (team_id,))
+        
         logger.info(f"Deleted workspace: {team_id}")
 
 
 def get_workspace_count() -> int:
     """Get total number of installed workspaces."""
     with get_db_connection() as conn:
-        cursor = conn.cursor()
+        cursor = get_cursor(conn)
         cursor.execute("SELECT COUNT(*) as count FROM workspaces")
         row = cursor.fetchone()
         return row["count"] if row else 0
