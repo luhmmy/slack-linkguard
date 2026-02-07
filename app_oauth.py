@@ -87,6 +87,7 @@ class DatabaseInstallationStore:
                     team_id=team_id,
                     bot_token=bot_token,
                     bot_user_id="",  # Will be populated from database if needed
+                    user_id="",  # Required parameter
                 )
         return None
 
