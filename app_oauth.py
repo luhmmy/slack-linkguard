@@ -74,20 +74,23 @@ class DatabaseInstallationStore:
             team_id=installation.team_id,
             team_name=installation.team_name or "Unknown",
             bot_token=installation.bot_token,
-            bot_user_id=installation.bot_user_id
+            bot_user_id=installation.bot_user_id,
+            bot_id=installation.bot_id,
+            app_id=installation.app_id
         )
     
     def find_installation(self, *, enterprise_id: Optional[str], team_id: Optional[str], user_id: Optional[str] = None, is_enterprise_install: Optional[bool] = None):
         """Find installation by team_id."""
         if team_id:
-            bot_token = database.get_workspace_token(team_id)
-            if bot_token:
+            workspace = database.get_workspace(team_id)
+            if workspace:
                 return Installation(
-                    app_id="",  # Not needed for bot token
+                    app_id=workspace.get('app_id', ''),
                     team_id=team_id,
-                    bot_token=bot_token,
-                    bot_user_id="",  # Will be populated from database if needed
-                    user_id="",  # Required parameter
+                    bot_token=workspace['bot_token'],
+                    bot_user_id=workspace.get('bot_user_id', ''),
+                    bot_id=workspace.get('bot_id', ''),
+                    user_id=user_id or '',
                 )
         return None
 

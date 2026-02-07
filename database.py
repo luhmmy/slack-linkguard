@@ -40,6 +40,8 @@ def init_database():
                 team_name TEXT NOT NULL,
                 bot_token TEXT NOT NULL,
                 bot_user_id TEXT,
+                bot_id TEXT,
+                app_id TEXT,
                 installed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 last_active TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
@@ -47,7 +49,7 @@ def init_database():
         logger.info("Database initialized successfully")
 
 
-def save_workspace(team_id: str, team_name: str, bot_token: str, bot_user_id: str = None):
+def save_workspace(team_id: str, team_name: str, bot_token: str, bot_user_id: str = None, bot_id: str = None, app_id: str = None):
     """
     Save or update workspace installation data.
     
@@ -56,18 +58,22 @@ def save_workspace(team_id: str, team_name: str, bot_token: str, bot_user_id: st
         team_name: Slack team/workspace name
         bot_token: OAuth bot access token
         bot_user_id: Bot user ID (optional)
+        bot_id: Bot ID (optional)
+        app_id: App ID (optional)
     """
     with get_db_connection() as conn:
         cursor = conn.cursor()
         cursor.execute("""
-            INSERT INTO workspaces (team_id, team_name, bot_token, bot_user_id, installed_at, last_active)
-            VALUES (?, ?, ?, ?, ?, ?)
+            INSERT INTO workspaces (team_id, team_name, bot_token, bot_user_id, bot_id, app_id, installed_at, last_active)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(team_id) DO UPDATE SET
                 team_name = excluded.team_name,
                 bot_token = excluded.bot_token,
                 bot_user_id = excluded.bot_user_id,
+                bot_id = excluded.bot_id,
+                app_id = excluded.app_id,
                 last_active = excluded.last_active
-        """, (team_id, team_name, bot_token, bot_user_id, datetime.utcnow(), datetime.utcnow()))
+        """, (team_id, team_name, bot_token, bot_user_id, bot_id, app_id, datetime.utcnow(), datetime.utcnow()))
         logger.info(f"Saved workspace: {team_name} ({team_id})")
 
 
@@ -92,6 +98,33 @@ def get_workspace_token(team_id: str) -> Optional[str]:
                 (datetime.utcnow(), team_id)
             )
             return row["bot_token"]
+        return None
+
+
+def get_workspace(team_id: str) -> Optional[Dict]:
+    """
+    Retrieve complete workspace data for a specific workspace.
+    
+    Args:
+        team_id: Slack team/workspace ID
+        
+    Returns:
+        Workspace dictionary if found, None otherwise
+    """
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT team_id, team_name, bot_token, bot_user_id, bot_id, app_id, installed_at, last_active
+            FROM workspaces WHERE team_id = ?
+        """, (team_id,))
+        row = cursor.fetchone()
+        if row:
+            # Update last_active timestamp
+            cursor.execute(
+                "UPDATE workspaces SET last_active = ? WHERE team_id = ?",
+                (datetime.utcnow(), team_id)
+            )
+            return dict(row)
         return None
 
 
