@@ -384,6 +384,46 @@ def health_check():
     }, 200
 
 
+@flask_app.route("/privacy")
+def privacy():
+    """Privacy policy page required for public distribution."""
+    return """
+    <html>
+    <head><title>Privacy Policy - LinkGuard</title></head>
+    <body style="font-family: sans-serif; padding: 50px; line-height: 1.6; max-width: 800px; margin: 0 auto;">
+        <h1>Privacy Policy for LinkGuard</h1>
+        <p>Last updated: February 2026</p>
+        <p>LinkGuard ("we," "our," or "us") provides a Slack application designed to identify and warn users about potentially malicious links.</p>
+        <h2>1. Information We Collect</h2>
+        <p>When you install and use LinkGuard, we collect and process the following information:</p>
+        <ul>
+            <li><strong>Slack Workspace Information:</strong> Workspace name, ID, and OAuth tokens required to function.</li>
+            <li><strong>URLs:</strong> We extract and analyze URLs from messages in channels where the bot is present.</li>
+        </ul>
+        <h2>2. How We Use Information</h2>
+        <p>We use the collected information solely to provide the link scanning service. URLs are submitted to VirusTotal for analysis.</p>
+        <h2>3. Data Storage</h2>
+        <p>We store workspace OAuth tokens and basic configuration in a secure database to maintain functionality. We do not store the content of your Slack messages beyond the URLs being analyzed.</p>
+        <h2>4. Contact Us</h2>
+        <p>If you have any questions, please contact the application administrator.</p>
+    </body>
+    </html>
+    """
+
+@flask_app.route("/support")
+def support():
+    """Support page required for public distribution."""
+    return """
+    <html>
+    <head><title>Support - LinkGuard</title></head>
+    <body style="font-family: sans-serif; padding: 50px; line-height: 1.6; max-width: 800px; margin: 0 auto;">
+        <h1>Support for LinkGuard</h1>
+        <p>If you encounter any issues with LinkGuard, please contact the administrator or open an issue on the GitHub repository.</p>
+    </body>
+    </html>
+    """
+
+
 @flask_app.route("/", methods=["GET"])
 def home():
     """Home page with installation button."""
@@ -430,6 +470,15 @@ def home():
             .install-btn {
                 margin: 30px 0;
             }
+            .footer {
+                margin-top: 30px;
+                font-size: 14px;
+            }
+            .footer a {
+                color: #667eea;
+                margin: 0 10px;
+                text-decoration: none;
+            }
         </style>
     </head>
     <body>
@@ -459,9 +508,9 @@ def home():
                 </a>
             </div>
             
-            <p style="font-size: 14px; color: #666; margin-top: 30px;">
-                By installing LinkGuard, you agree to our privacy policy and terms of service.
-            </p>
+            <div class="footer">
+                <a href="/privacy">Privacy Policy</a> | <a href="/support">Support</a>
+            </div>
         </div>
     </body>
     </html>
