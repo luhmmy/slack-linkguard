@@ -404,7 +404,14 @@ def privacy():
         <p>We use the collected information solely to provide the link scanning service. URLs are submitted to VirusTotal for analysis.</p>
         <h2>3. Data Storage</h2>
         <p>We store workspace OAuth tokens and basic configuration in a secure database to maintain functionality. We do not store the content of your Slack messages beyond the URLs being analyzed.</p>
-        <h2>4. Contact Us</h2>
+        <h2>4. Data Retention Policy</h2>
+        <p>We retain data according to the following guidelines:</p>
+        <ul>
+            <li><strong>Workspace Tokens:</strong> Retained as long as the application remains installed in your workspace. Tokens are deleted upon uninstallation.</li>
+            <li><strong>URL Analysis Cache:</strong> URL safety status is cached for performance and is typically retained for 30 days.</li>
+            <li><strong>Messages:</strong> We do not store Slack message text, user names, or any conversational data.</li>
+        </ul>
+        <h2>5. Contact Us</h2>
         <p>If you have any questions, please contact the application administrator.</p>
     </body>
     </html>
