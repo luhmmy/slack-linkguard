@@ -313,17 +313,15 @@ def handle_message(event, say, client):
             is_malicious = check_with_fallback(url)
             check_method = "keyword analysis"
             
-            # Warn user that we couldn't verify with VirusTotal
             if not is_malicious:
                 logger.warning(f"Could not verify URL with VirusTotal: {url}")
                 say(
                     text=(
                         f"⚠️ *URL Verification Incomplete*\n"
-                        f"<@{user}> shared a link that could not be fully verified:\n"
-                        f"`{url}`\n\n"
+                        f"<@{user}> shared a link that could not be fully verified.\n\n"
                         f"⚠️ VirusTotal analysis timed out\n"
                         f"✓ No suspicious keywords detected\n\n"
-                        f"🔍 Please verify this link manually before clicking."
+                        f"🔍 Please verify the original link manually before clicking."
                     ),
                     channel=channel
                 )
@@ -337,10 +335,9 @@ def handle_message(event, say, client):
             say(
                 text=(
                     f"🚨 *Malicious Link Detected*\n"
-                    f"<@{user}> shared a suspicious link:\n"
-                    f"`{url}`\n\n"
+                    f"<@{user}> shared a suspicious link in this channel.\n\n"
                     f"⚠️ Detected by: {check_method}\n"
-                    "❌ Do NOT click this link."
+                    "❌ *DO NOT click the link in the message above.*"
                 ),
                 channel=channel
             )
