@@ -15,6 +15,7 @@ from flask import Flask, request, redirect, render_template_string
 from dotenv import load_dotenv
 from urllib.parse import urlparse
 import database
+from concurrent.futures import ThreadPoolExecutor
 
 # Load environment variables
 load_dotenv()
@@ -143,6 +144,27 @@ def is_trusted_domain(url: str) -> bool:
         return False
 
 
+def get_url_report(url: str) -> Optional[dict]:
+    """Check if VirusTotal already has a report for this URL."""
+    if not VT_API_KEY:
+        return None
+        
+    try:
+        # Generate URL ID (Base64 without padding)
+        import base64
+        url_id = base64.urlsafe_b64encode(url.encode()).decode().strip("=")
+        
+        report_url = f"https://www.virustotal.com/api/v3/urls/{url_id}"
+        headers = {"x-apikey": VT_API_KEY}
+        
+        response = requests.get(report_url, headers=headers, timeout=5)
+        if response.status_code == 200:
+            return response.json()
+    except Exception as e:
+        logger.error(f"Error checking existing VT report: {e}")
+    return None
+
+
 def _check_virustotal_impl(url: str) -> Union[bool, str]:
     """
     Internal implementation for VirusTotal check.
@@ -152,10 +174,21 @@ def _check_virustotal_impl(url: str) -> Union[bool, str]:
         logger.warning("VirusTotal API key not configured")
         return "fallback"
     
+    # 1. Hyper-Fast Check: See if VirusTotal already has a report
+    existing_report = get_url_report(url)
+    if existing_report:
+        attributes = existing_report.get("data", {}).get("attributes", {})
+        stats = attributes.get("last_analysis_stats", {})
+        malicious = stats.get("malicious", 0)
+        suspicious = stats.get("suspicious", 0)
+        logger.info(f"Using existing VT report for {url}: {malicious} malicious, {suspicious} suspicious")
+        return (malicious + suspicious) > 0
+
+    # 2. Regular Check: Submit and Poll
     try:
         headers = {"x-apikey": VT_API_KEY}
         
-        # First, submit the URL for scanning
+        # Submit the URL for scanning
         submit_response = requests.post(
             VT_SUBMIT_URL,
             headers=headers,
@@ -163,17 +196,14 @@ def _check_virustotal_impl(url: str) -> Union[bool, str]:
             timeout=config.vt_timeout
         )
         
-        # Check for rate limiting
         if submit_response.status_code == 429:
             logger.warning("VirusTotal rate limit reached")
             return "fallback"
         
-        # Check for other errors
         if submit_response.status_code != 200:
             logger.error(f"VirusTotal submit failed: {submit_response.status_code}")
             return "fallback"
         
-        # Get the analysis ID from the response
         submit_data = submit_response.json()
         analysis_id = submit_data.get("data", {}).get("id")
         
@@ -181,11 +211,13 @@ def _check_virustotal_impl(url: str) -> Union[bool, str]:
             logger.error("No analysis ID returned from VirusTotal")
             return "fallback"
         
-        # Poll for analysis results with retries
+        # Poll for analysis results
         analysis_url = f"https://www.virustotal.com/api/v3/analyses/{analysis_id}"
         
         for attempt in range(config.vt_max_retries):
-            time.sleep(config.vt_retry_delay)
+            # Faster polling for the first few attempts
+            sleep_time = 1.0 if attempt < 2 else config.vt_retry_delay
+            time.sleep(sleep_time)
             
             analysis_response = requests.get(
                 analysis_url, 
@@ -194,41 +226,24 @@ def _check_virustotal_impl(url: str) -> Union[bool, str]:
             )
             
             if analysis_response.status_code != 200:
-                logger.error(f"VirusTotal analysis failed: {analysis_response.status_code}")
                 continue
             
             analysis_data = analysis_response.json()
             attributes = analysis_data.get("data", {}).get("attributes", {})
             status = attributes.get("status")
             
-            # Check if analysis is complete
             if status == "completed":
                 stats = attributes.get("stats", {})
-                # Safe type conversion with fallback
                 malicious_count = stats.get("malicious") or 0
                 suspicious_count = stats.get("suspicious") or 0
-                
-                if not isinstance(malicious_count, (int, float)):
-                    malicious_count = 0
-                if not isinstance(suspicious_count, (int, float)):
-                    suspicious_count = 0
-                
-                # Consider URL malicious if any scanner flagged it
                 return (int(malicious_count) + int(suspicious_count)) > 0
             
             logger.info(f"Analysis not complete, attempt {attempt + 1}/{config.vt_max_retries}")
         
         logger.warning("VirusTotal analysis did not complete in time")
         return "fallback"
-        
-    except requests.exceptions.Timeout:
-        logger.error("VirusTotal request timed out")
-        return "fallback"
-    except requests.exceptions.RequestException as e:
-        logger.error(f"VirusTotal network error: {e}")
-        return "fallback"
     except Exception as e:
-        logger.error(f"VirusTotal check failed unexpectedly: {e}")
+        logger.error(f"VirusTotal check failed: {e}")
         return "fallback"
 
 
@@ -295,42 +310,53 @@ def handle_message(event, say, client):
     urls = extract_urls(event)
     
     if not urls:
-        return  # No URLs to check
+        return
     
     logger.info(f"Checking {len(urls)} URL(s) from user {user}")
 
-    for url in urls:
-        # Skip trusted domains
+    # Process each URL
+    def scan_url(url):
+        # 1. Skip trusted domains
         if is_trusted_domain(url):
-            logger.info(f"Skipping trusted domain: {url}")
-            continue
-        
-        # Check with VirusTotal (cached)
+            return None
+
+        # 2. MICROSECOND CHECK: Instant Keyword Analysis
+        if check_with_fallback(url):
+            return ("keyword", url)
+
+        # 3. FAST/DEEP CHECK: VirusTotal (Cached + Fast Lookup)
         vt_result = check_virustotal(url)
-
         if vt_result == "fallback":
-            # VirusTotal unavailable, use keyword check
-            is_malicious = check_with_fallback(url)
-            check_method = "keyword analysis"
-            
-            if not is_malicious:
-                logger.warning(f"Could not verify URL with VirusTotal: {url}")
-                say(
-                    text=(
-                        f"⚠️ *URL Verification Incomplete*\n"
-                        f"<@{user}> shared a link that could not be fully verified.\n\n"
-                        f"⚠️ VirusTotal analysis timed out\n"
-                        f"✓ No suspicious keywords detected\n\n"
-                        f"🔍 Please verify the original link manually before clicking."
-                    ),
-                    channel=channel
-                )
-                continue  # Skip to next URL
-        else:
-            is_malicious = vt_result
-            check_method = "VirusTotal"
+            return ("timeout", url)
+        elif vt_result is True:
+            return ("VirusTotal", url)
+        
+        return None
 
-        if is_malicious:
+    # Use parallel processing for multiple URLs
+    with ThreadPoolExecutor(max_workers=5) as executor:
+        results = list(executor.map(scan_url, urls))
+
+    # Send alerts for any malicious links found
+    for result in results:
+        if not result:
+            continue
+            
+        check_method, url = result
+        
+        if check_method == "timeout":
+            logger.warning(f"VirusTotal analysis timed out for: {url}")
+            say(
+                text=(
+                    f"⚠️ *URL Verification Incomplete*\n"
+                    f"<@{user}> shared a link that could not be fully verified.\n\n"
+                    f"⚠️ VirusTotal analysis timed out\n"
+                    f"✓ No suspicious keywords detected\n\n"
+                    f"🔍 Please verify the original link manually before clicking."
+                ),
+                channel=channel
+            )
+        else:
             logger.warning(f"Malicious URL detected ({check_method}): {url}")
             say(
                 text=(
@@ -341,8 +367,6 @@ def handle_message(event, say, client):
                 ),
                 channel=channel
             )
-        else:
-            logger.info(f"URL verified safe by {check_method}: {url}")
 
 
 # Flask app to handle Slack events and OAuth
