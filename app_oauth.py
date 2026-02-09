@@ -423,6 +423,28 @@ def support():
     </html>
     """
 
+@flask_app.route("/tos")
+def tos():
+    """Terms of Service page required for public distribution."""
+    return """
+    <html>
+    <head><title>Terms of Service - LinkGuard</title></head>
+    <body style="font-family: sans-serif; padding: 50px; line-height: 1.6; max-width: 800px; margin: 0 auto;">
+        <h1>Terms of Service for LinkGuard</h1>
+        <p>Last updated: February 2026</p>
+        <p>By installing and using LinkGuard, you agree to the following terms:</p>
+        <h2>1. Service Description</h2>
+        <p>LinkGuard provides an automated URL analysis service for Slack. While we strive for accuracy, we do not guarantee that all malicious links will be detected.</p>
+        <h2>2. Use of VirusTotal</h2>
+        <p>URLs are submitted to VirusTotal for analysis. By using this service, you acknowledge that URLs shared in your workspace will be shared with VirusTotal according to their terms of service.</p>
+        <h2>3. Liability</h2>
+        <p>We are not liable for any damages resulting from clicking on malicious links or from the unavailability of the service.</p>
+        <h2>4. Termination</h2>
+        <p>We reserve the right to terminate service for any workspace that misuses the application or violates Slack's terms of service.</p>
+    </body>
+    </html>
+    """
+
 
 @flask_app.route("/", methods=["GET"])
 def home():
@@ -509,7 +531,7 @@ def home():
             </div>
             
             <div class="footer">
-                <a href="/privacy">Privacy Policy</a> | <a href="/support">Support</a>
+                <a href="/privacy">Privacy Policy</a> | <a href="/tos">Terms of Service</a> | <a href="/support">Support</a>
             </div>
         </div>
     </body>
