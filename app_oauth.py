@@ -320,17 +320,19 @@ def handle_message(event, say, client):
         if is_trusted_domain(url):
             return None
 
-        # 2. MICROSECOND CHECK: Instant Keyword Analysis
-        if check_with_fallback(url):
-            return ("keyword", url)
-
-        # 3. FAST/DEEP CHECK: VirusTotal (Cached + Fast Lookup)
+        # 2. FAST/DEEP CHECK: VirusTotal (Cached + Fast Lookup)
         vt_result = check_virustotal(url)
-        if vt_result == "fallback":
-            return ("timeout", url)
-        elif vt_result is True:
+        
+        if vt_result is True:
             return ("VirusTotal", url)
         
+        # 3. FALLBACK CHECK: Instant Keyword Analysis (Only if VT is unavailable)
+        if vt_result == "fallback":
+            if check_with_fallback(url):
+                return ("keyword", url)
+            return ("timeout", url)
+        
+        # vt_result is False (Safe)
         return None
 
     # Use parallel processing for multiple URLs
@@ -356,13 +358,25 @@ def handle_message(event, say, client):
                 ),
                 channel=channel
             )
+        elif check_method == "keyword":
+            logger.warning(f"Suspicious link pattern detected (fallback): {url}")
+            say(
+                text=(
+                    f"⚠️ *Suspicious Link Pattern*\n"
+                    f"<@{user}> shared a link matching a suspicious pattern.\n\n"
+                    f"⚠️ Path match: `{url}`\n"
+                    f"✓ Verification service was temporarily unavailable.\n\n"
+                    f"🔍 Please verify carefully before clicking."
+                ),
+                channel=channel
+            )
         else:
             logger.warning(f"Malicious URL detected ({check_method}): {url}")
             say(
                 text=(
                     f"🚨 *Malicious Link Detected*\n"
-                    f"<@{user}> shared a suspicious link in this channel.\n\n"
-                    f"⚠️ Detected by: {check_method}\n"
+                    f"<@{user}> shared a confirmed malicious link.\n\n"
+                    f"🚨 Verified by: *VirusTotal*\n"
                     "❌ *DO NOT click the link in the message above.*"
                 ),
                 channel=channel
