@@ -38,13 +38,11 @@ class Config:
         "github.com",
         "linkedin.com",
     ])
-    malicious_keywords: List[str] = field(default_factory=lambda: [
-        "phish", "malware", "badsite", "danger", "hack", "virus"
-    ])
     vt_timeout: int = 15
     vt_max_retries: int = 5
     vt_retry_delay: float = 3.0
     cache_maxsize: int = 1000
+    gsb_timeout: int = 5
 
 
 # Global configuration instance
@@ -55,6 +53,7 @@ SLACK_CLIENT_ID = os.environ.get("SLACK_CLIENT_ID")
 SLACK_CLIENT_SECRET = os.environ.get("SLACK_CLIENT_SECRET")
 SLACK_SIGNING_SECRET = os.environ.get("SLACK_SIGNING_SECRET")
 VT_API_KEY = os.environ.get("VT_API_KEY")
+GOOGLE_SAFE_BROWSING_API_KEY = os.environ.get("GOOGLE_SAFE_BROWSING_API_KEY")
 
 # Validate required environment variables
 if not SLACK_CLIENT_ID:
@@ -113,6 +112,9 @@ app = App(
 
 # VirusTotal configuration
 VT_SUBMIT_URL = "https://www.virustotal.com/api/v3/urls"
+
+# Google Safe Browsing configuration
+GSB_API_URL = "https://safebrowsing.googleapis.com/v4/threatMatches:find"
 
 # URL regex pattern
 URL_REGEX = r"(https?://[^\s<>\"']+)"
@@ -291,10 +293,54 @@ def extract_urls(event: dict) -> List[str]:
     return unique_urls
 
 
-def check_with_fallback(url: str) -> bool:
-    """Check URL using keywords when VirusTotal is unavailable."""
-    url_lower = url.lower()
-    return any(keyword in url_lower for keyword in config.malicious_keywords)
+def check_google_safe_browsing(url: str) -> bool:
+    """Check URL against Google Safe Browsing when VirusTotal is unavailable."""
+    if not GOOGLE_SAFE_BROWSING_API_KEY:
+        logger.warning("Google Safe Browsing API key not configured")
+        return False
+
+    try:
+        payload = {
+            "client": {
+                "clientId": "slack-linkguard",
+                "clientVersion": "1.0.0"
+            },
+            "threatInfo": {
+                "threatTypes": [
+                    "MALWARE",
+                    "SOCIAL_ENGINEERING",
+                    "UNWANTED_SOFTWARE",
+                    "POTENTIALLY_HARMFUL_APPLICATION"
+                ],
+                "platformTypes": ["ANY_PLATFORM"],
+                "threatEntryTypes": ["URL"],
+                "threatEntries": [{"url": url}]
+            }
+        }
+
+        response = requests.post(
+            f"{GSB_API_URL}?key={GOOGLE_SAFE_BROWSING_API_KEY}",
+            json=payload,
+            timeout=config.gsb_timeout
+        )
+
+        if response.status_code != 200:
+            logger.error(f"Google Safe Browsing request failed: {response.status_code}")
+            return False
+
+        result = response.json()
+        # If matches exist, the URL is malicious
+        return bool(result.get("matches"))
+
+    except requests.exceptions.Timeout:
+        logger.error("Google Safe Browsing request timed out")
+        return False
+    except requests.exceptions.RequestException as e:
+        logger.error(f"Google Safe Browsing network error: {e}")
+        return False
+    except Exception as e:
+        logger.error(f"Google Safe Browsing check failed unexpectedly: {e}")
+        return False
 
 
 @app.event("message")
@@ -326,10 +372,10 @@ def handle_message(event, say, client):
         if vt_result is True:
             return ("VirusTotal", url)
         
-        # 3. FALLBACK CHECK: Instant Keyword Analysis (Only if VT is unavailable)
+        # 3. FALLBACK CHECK: Google Safe Browsing (Only if VT is unavailable)
         if vt_result == "fallback":
-            if check_with_fallback(url):
-                return ("keyword", url)
+            if check_google_safe_browsing(url):
+                return ("Google Safe Browsing", url)
             return ("timeout", url)
         
         # vt_result is False (Safe)
@@ -353,20 +399,20 @@ def handle_message(event, say, client):
                     f"⚠️ *URL Verification Incomplete*\n"
                     f"<@{user}> shared a link that could not be fully verified.\n\n"
                     f"⚠️ VirusTotal analysis timed out\n"
-                    f"✓ No suspicious keywords detected\n\n"
+                    f"✓ No threats found by Google Safe Browsing\n\n"
                     f"🔍 Please verify the original link manually before clicking."
                 ),
                 channel=channel
             )
-        elif check_method == "keyword":
-            logger.warning(f"Suspicious link pattern detected (fallback): {url}")
+        elif check_method == "Google Safe Browsing":
+            logger.warning(f"Malicious URL detected (Google Safe Browsing fallback): {url}")
             say(
                 text=(
-                    f"⚠️ *Suspicious Link Pattern*\n"
-                    f"<@{user}> shared a link matching a suspicious pattern.\n\n"
-                    f"⚠️ Path match: `{url}`\n"
-                    f"✓ Verification service was temporarily unavailable.\n\n"
-                    f"🔍 Please verify carefully before clicking."
+                    f"🚨 *Malicious Link Detected*\n"
+                    f"<@{user}> shared a suspicious link.\n\n"
+                    f"⚠️ Flagged by: *Google Safe Browsing*\n"
+                    f"✓ VirusTotal was temporarily unavailable.\n\n"
+                    f"❌ *DO NOT click the link in the message above.*"
                 ),
                 channel=channel
             )
@@ -453,6 +499,7 @@ def health_check():
         "status": "healthy", 
         "service": "LinkGuard",
         "vt_configured": bool(VT_API_KEY),
+        "gsb_configured": bool(GOOGLE_SAFE_BROWSING_API_KEY),
         "cache_info": check_virustotal.cache_info()._asdict(),
         "workspaces": workspace_count
     }, 200
@@ -595,7 +642,7 @@ def home():
                     <li>⚡ Real-time threat detection</li>
                     <li>🎯 Skips trusted domains</li>
                     <li>🔄 Smart caching for faster checks</li>
-                    <li>📊 Fallback keyword detection</li>
+                    <li>📊 Google Safe Browsing fallback</li>
                 </ul>
             </div>
             
@@ -632,6 +679,7 @@ if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
     logger.info(f"LinkGuard is starting on port {port}...")
     logger.info(f"VirusTotal API configured: {bool(VT_API_KEY)}")
+    logger.info(f"Google Safe Browsing API configured: {bool(GOOGLE_SAFE_BROWSING_API_KEY)}")
     logger.info(f"Trusted domains: {len(config.trusted_domains)}")
     logger.info(f"Cache size: {config.cache_maxsize}")
     logger.info(f"Installed workspaces: {database.get_workspace_count()}")
